@@ -1,9 +1,7 @@
 """
 Skip-Gram with Negative Sampling (SGNS)
 
-Loss for one (center, context+) pair with K negative samples:
-
-    L = -log sig(u_o . v_c) - sum_k log sig(-u_k . v_c)
+Loss:  L = -log sig(u_o . v_c) - sum_k log sig(-u_k . v_c)
 
 Gradients:
     dL/dv_c  = (sig(u_o . v_c) - 1) * u_o  +  sum_k sig(u_k . v_c) * u_k
@@ -15,7 +13,6 @@ import numpy as np
 
 
 def _sigmoid(x: np.ndarray) -> np.ndarray:
-    # split into two cases to avoid overflow in exp()
     return np.where(
         x >= 0,
         1.0 / (1.0 + np.exp(-x)),
@@ -32,42 +29,62 @@ class Word2Vec:
 
         scale = 0.5 / embedding_dim
         self.W_center = rng.uniform(-scale, scale, (vocab_size, embedding_dim))
-        self.W_context = np.zeros((vocab_size, embedding_dim))
+        self.W_context = rng.uniform(-scale, scale, (vocab_size, embedding_dim))
 
-    def train_step(
-        self, center_idx: int, context_idx: int, neg_indices: np.ndarray, lr: float,
-    ) -> float:
-        # .copy() because numpy indexing with a scalar returns a view,
-        # and we don't want the SGD updates below to corrupt values
-        # we still need for other gradients
+    def train_batch(self, centers: np.ndarray, contexts: np.ndarray,
+                    negatives: np.ndarray, lr: float) -> float:
+        B, K = negatives.shape
+
+        v_c = self.W_center[centers]
+        u_o = self.W_context[contexts]
+        u_neg = self.W_context[negatives]
+
+        scores_pos = np.sum(u_o * v_c, axis=1)
+        scores_neg = np.einsum("bkd,bd->bk", u_neg, v_c)
+
+        sig_pos = _sigmoid(scores_pos)
+        sig_neg = _sigmoid(scores_neg)
+
+        eps = 1e-7
+        loss = -np.sum(np.log(sig_pos + eps)) - np.sum(np.log(1.0 - sig_neg + eps))
+
+        coeff_pos = (sig_pos - 1.0)[:, None]
+        coeff_neg = sig_neg[:, :, None]
+        grad_vc = coeff_pos * u_o + (coeff_neg * u_neg).sum(axis=1)
+        grad_uo = coeff_pos * v_c
+        grad_uneg = coeff_neg * v_c[:, None, :]
+
+        # np.add.at handles duplicate indices correctly (unlike -=)
+        np.add.at(self.W_center, centers, -lr * grad_vc)
+        np.add.at(self.W_context, contexts, -lr * grad_uo)
+        np.add.at(self.W_context, negatives, -lr * grad_uneg)
+
+        return float(loss)
+
+    def train_step(self, center_idx: int, context_idx: int,
+                   neg_indices: np.ndarray, lr: float) -> float:
         v_c = self.W_center[center_idx].copy()
         u_o = self.W_context[context_idx].copy()
         u_neg = self.W_context[neg_indices].copy()
 
-        # forward
         sig_pos = _sigmoid(u_o @ v_c)
         sig_neg = _sigmoid(u_neg @ v_c)
 
-        # loss
         eps = 1e-7
         loss = -np.log(sig_pos + eps) - np.sum(np.log(1.0 - sig_neg + eps))
 
-        # gradients (see module docstring for derivation)
         grad_vc = (sig_pos - 1.0) * u_o + (sig_neg[:, None] * u_neg).sum(axis=0)
         grad_uo = (sig_pos - 1.0) * v_c
         grad_uneg = sig_neg[:, None] * v_c[None, :]
 
-        # SGD
         self.W_center[center_idx] -= lr * grad_vc
         self.W_context[context_idx] -= lr * grad_uo
         self.W_context[neg_indices] -= lr * grad_uneg
 
         return float(loss)
 
-    def compute_loss(
-        self, center_idx: int, context_idx: int, neg_indices: np.ndarray,
-    ) -> float:
-        """Forward pass only, no update. Used by gradient_check.py."""
+    def compute_loss(self, center_idx: int, context_idx: int,
+                     neg_indices: np.ndarray) -> float:
         v_c = self.W_center[center_idx]
         u_o = self.W_context[context_idx]
         u_neg = self.W_context[neg_indices]

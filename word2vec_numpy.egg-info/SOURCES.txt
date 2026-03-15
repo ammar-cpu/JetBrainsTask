@@ -1,0 +1,14 @@
+README.md
+pyproject.toml
+word2vec/__init__.py
+word2vec/config.py
+word2vec/data.py
+word2vec/evaluate.py
+word2vec/model.py
+word2vec/trainer.py
+word2vec/vocabulary.py
+word2vec_numpy.egg-info/PKG-INFO
+word2vec_numpy.egg-info/SOURCES.txt
+word2vec_numpy.egg-info/dependency_links.txt
+word2vec_numpy.egg-info/requires.txt
+word2vec_numpy.egg-info/top_level.txt
